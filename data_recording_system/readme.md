@@ -27,3 +27,5 @@ python multi_camera_video_capture.py --min-range 0.4 --max-range 0.58
 python simple_multi_cam.py --min-range 0.4 --max-range 0.58 --output-dir test_capture
 
 python synchronized_d415_capture3.py --min-range 0.4 --max-range 0.58 --output-dir complete_capture
+
+![image](https://github.com/user-attachments/assets/596d8c98-cacc-4b14-afcf-33e805fe6bc3)
