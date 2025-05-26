@@ -29,6 +29,8 @@ python simple_multi_cam.py --min-range 0.4 --max-range 0.58 --output-dir test_ca
 python synchronized_d415_capture.py --min-range 0.4 --max-range 0.58 --output-dir complete_capture
 
 (realsense) E:\vscode\calibration>python synchronized_d415_capture.py --min-range 0.4 --max-range 0.58 --output-dir data/user01/2
+![000000_synchronized_20250526_094327](https://github.com/user-attachments/assets/8e876481-6170-44d0-b61e-090dc8650120)
+
 
 (realsense) E:\vscode\calibration>python synchronized_d415_capture.py --min-range 0.4 --max-range 0.58 --output-dir data/user01/1
 
