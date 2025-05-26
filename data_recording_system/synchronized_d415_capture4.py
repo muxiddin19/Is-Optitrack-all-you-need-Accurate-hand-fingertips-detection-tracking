@@ -325,8 +325,9 @@ class SynchronizedMultiCameraCapture:
             return rgb_frame
     
     def create_display(self, frames):
-        """Create multi-camera display"""
+        """Create multi-camera display - FIXED memory allocation"""
         displays = []
+        target_size = (320, 240)  # Consistent size for all displays
         
         # D415 RGB-Depth overlay (now properly synchronized)
         if 'd415_rgb' in frames and 'd415_depth' in frames:
@@ -345,25 +346,27 @@ class SynchronizedMultiCameraCapture:
                 sync_text = "SYNC: POOR"
             
             cv2.putText(overlay, sync_text, (10, 90),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, sync_color, 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, sync_color, 1)
             cv2.putText(overlay, "D415: RGB+Depth", (10, overlay.shape[0]-20),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            displays.append(cv2.resize(overlay, (320, 240)))
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # FIXED: Ensure consistent resize
+            displays.append(cv2.resize(overlay, target_size))
         
         # D405 depth visualization
         if 'd405_depth' in frames:
             depth_vis = cv2.applyColorMap(
                 cv2.convertScaleAbs(frames['d405_depth'], alpha=0.05), cv2.COLORMAP_PLASMA)
             cv2.putText(depth_vis, "D405: Depth", (10, depth_vis.shape[0]-20),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            displays.append(cv2.resize(depth_vis, (320, 240)))
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            displays.append(cv2.resize(depth_vis, target_size))
         
         # D405 IR
         if 'd405_ir' in frames:
             ir_frame = frames['d405_ir']
             cv2.putText(ir_frame, "D405: IR", (10, ir_frame.shape[0]-20),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            displays.append(cv2.resize(ir_frame, (320, 240)))
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            displays.append(cv2.resize(ir_frame, target_size))
         
         # Platform cameras
         cam_number = 1
@@ -371,70 +374,105 @@ class SynchronizedMultiCameraCapture:
             if cam_name.startswith('platform_'):
                 cam_frame = frame.copy()
                 cv2.putText(cam_frame, f"PLATFORM {cam_number}", (10, cam_frame.shape[0]-20),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                displays.append(cv2.resize(cam_frame, (320, 240)))
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                displays.append(cv2.resize(cam_frame, target_size))
                 cam_number += 1
         
-        # Arrange displays in grid
+        # FIXED: Safer grid arrangement with consistent dimensions
         if len(displays) == 0:
-            combined = np.zeros((240, 320, 3), dtype=np.uint8)
+            combined = np.zeros((target_size[1], target_size[0], 3), dtype=np.uint8)
             cv2.putText(combined, "No synchronized feeds", (50, 120),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         elif len(displays) == 1:
             combined = displays[0]
         elif len(displays) == 2:
+            # Stack horizontally - both same size now
             combined = np.hstack(displays)
-        elif len(displays) <= 4:
-            if len(displays) == 3:
-                top_row = np.hstack(displays[:2])
-                bottom_row = np.hstack([displays[2], np.zeros((240, 320, 3), dtype=np.uint8)])
-            else:
-                top_row = np.hstack(displays[:2])
-                bottom_row = np.hstack(displays[2:4])
+        elif len(displays) == 3:
+            # Two on top, one on bottom with padding
+            top_row = np.hstack(displays[:2])
+            padding = np.zeros((target_size[1], target_size[0], 3), dtype=np.uint8)
+            bottom_row = np.hstack([displays[2], padding])
+            combined = np.vstack([top_row, bottom_row])
+        elif len(displays) == 4:
+            # 2x2 grid
+            top_row = np.hstack(displays[:2])
+            bottom_row = np.hstack(displays[2:4])
             combined = np.vstack([top_row, bottom_row])
         else:
-            # More than 4 displays
+            # More than 4 displays - arrange in rows of 2
             rows = []
             for i in range(0, len(displays), 2):
                 if i + 1 < len(displays):
                     row = np.hstack([displays[i], displays[i+1]])
                 else:
-                    row = np.hstack([displays[i], np.zeros((240, 320, 3), dtype=np.uint8)])
+                    padding = np.zeros((target_size[1], target_size[0], 3), dtype=np.uint8)
+                    row = np.hstack([displays[i], padding])
                 rows.append(row)
             combined = np.vstack(rows)
         
         return combined
     
     def save_synchronized_frame_set(self, frames):
-        """Save synchronized frame set"""
+        """Enhanced synchronized frame set saving with training-ready format"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         frame_num = f"{self.frame_count:06d}"
         
         saved_count = 0
         saved_details = []
+        quality_data = {}
         
         # Save D415 synchronized frames
-        if 'd415_rgb' in frames:
+        if 'd415_rgb' in frames and 'd415_depth' in frames:
+            rgb_frame = frames['d415_rgb']
+            depth_frame = frames['d415_depth']
+            
+            # Verify data quality
+            quality_metrics = self.verify_data_quality(rgb_frame, depth_frame)
+            quality_data.update(quality_metrics)
+            
+            # 1. Save original format (for reference)
             rgb_file = self.d415_dir / "rgb" / f"{frame_num}_rgb_{timestamp}.png"
-            cv2.imwrite(str(rgb_file), frames['d415_rgb'])
+            cv2.imwrite(str(rgb_file), rgb_frame)
             saved_count += 1
-            saved_details.append("D415 RGB")
             
-        if 'd415_depth' in frames:
             depth_file = self.d415_dir / "depth" / f"{frame_num}_depth_{timestamp}.png"
-            cv2.imwrite(str(depth_file), frames['d415_depth'].astype(np.uint16))
+            cv2.imwrite(str(depth_file), depth_frame.astype(np.uint16))
             saved_count += 1
-            saved_details.append("D415 Depth")
             
-            # Save synchronized overlay
-            if 'd415_rgb' in frames:
-                overlay = self.create_depth_overlay(frames['d415_rgb'], frames['d415_depth'])
-                overlay_file = self.d415_dir / "overlay" / f"{frame_num}_overlay_{timestamp}.png"
-                cv2.imwrite(str(overlay_file), overlay)
-                saved_count += 1
-                saved_details.append("D415 Overlay")
+            # 2. Save training-ready format for each model
+            try:
+                for model in ["adabins", "newcrfs", "zoedepth"]:
+                    model_dir = self.training_dir / model
+                    
+                    # Model-specific resolution
+                    if model == "zoedepth":
+                        target_size = (384, 384)  # Square for transformer
+                    else:
+                        target_size = (480, 640)  # NYU format
+                    
+                    # Save model-ready RGB
+                    model_rgb_file = model_dir / "rgb" / f"{frame_num}_{timestamp}.png"
+                    if self.save_model_ready_rgb(rgb_frame, model_rgb_file, target_size):
+                        saved_count += 1
+                    
+                    # Save model-ready depth (resize to match RGB)
+                    depth_resized = cv2.resize(depth_frame, (target_size[1], target_size[0]))
+                    model_depth_file = model_dir / "depth" / f"{frame_num}_{timestamp}"
+                    if self.save_training_ready_depth(depth_resized, model_depth_file):
+                        saved_count += 1
+            except Exception as e:
+                print(f"⚠️  Training format save error: {e}")
+            
+            # Save overlay
+            overlay = self.create_depth_overlay(rgb_frame, depth_frame)
+            overlay_file = self.d415_dir / "overlay" / f"{frame_num}_overlay_{timestamp}.png"
+            cv2.imwrite(str(overlay_file), overlay)
+            saved_count += 1
+            
+            saved_details = ["D415 RGB", "D415 Depth", "Training Formats", "Overlay"]
         
-        # Save D405 frames
+        # Save D405 frames (if available)
         if 'd405_depth' in frames:
             depth_file = self.d405_dir / "depth" / f"{frame_num}_depth_{timestamp}.png"
             cv2.imwrite(str(depth_file), frames['d405_depth'].astype(np.uint16))
@@ -460,21 +498,37 @@ class SynchronizedMultiCameraCapture:
         
         # Save synchronized display
         if len(frames) > 1:
-            sync_display = self.create_display(frames)
-            sync_file = self.sync_dir / f"{frame_num}_synchronized_{timestamp}.png"
-            cv2.imwrite(str(sync_file), sync_display)
-            saved_count += 1
-            saved_details.append("Synchronized")
+            try:
+                sync_display = self.create_display(frames)
+                sync_file = self.sync_dir / f"{frame_num}_synchronized_{timestamp}.png"
+                cv2.imwrite(str(sync_file), sync_display)
+                saved_count += 1
+                saved_details.append("Synchronized View")
+            except Exception as e:
+                print(f"⚠️  Display save error: {e}")
         
-        # Create metadata with sync quality info
+        # Enhanced metadata with training info
         metadata = {
             "frame_set": self.frame_count,
             "timestamp": timestamp,
             "cameras_captured": list(frames.keys()),
             "files_saved": saved_count,
             "target_range_mm": [self.target_range[0]*1000, self.target_range[1]*1000],
+            "training_range_m": [0.4, 0.58],
+            "max_depth_cap_m": 2.0,
             "sync_quality_ms": frames.get('sync_quality', 0),
-            "file_details": saved_details
+            "data_quality": quality_data,
+            "file_details": saved_details,
+            "formats": {
+                "original_depth": "16-bit PNG (millimeters)",
+                "training_depth": "float32 NPY (meters, capped at 2m)",
+                "rgb_resolutions": {
+                    "adabins": [480, 640],
+                    "newcrfs": [480, 640], 
+                    "zoedepth": [384, 384]
+                }
+            },
+            "alignment_method": "hardware_synchronized"
         }
         
         metadata_file = self.sync_dir / f"{frame_num}_metadata_{timestamp}.json"
@@ -482,8 +536,16 @@ class SynchronizedMultiCameraCapture:
             json.dump(metadata, f, indent=2)
         
         self.frame_count += 1
+        
+        # Enhanced status reporting
         sync_quality = frames.get('sync_quality', 0)
-        print(f"📸 Set {self.frame_count}: {saved_count} files, sync: {sync_quality:.1f}ms ({', '.join(saved_details)})")
+        alignment_score = quality_data.get('edge_alignment', 0)
+        depth_coverage = quality_data.get('depth_coverage', 0)
+        
+        print(f"📸 Set {self.frame_count}: {saved_count} files | "
+            f"Sync: {sync_quality:.1f}ms | "
+            f"Align: {alignment_score:.2f} | "
+            f"Coverage: {depth_coverage:.1%}")
         
         return saved_count
     
