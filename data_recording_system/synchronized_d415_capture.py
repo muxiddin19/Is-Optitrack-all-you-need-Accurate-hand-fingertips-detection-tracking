@@ -31,6 +31,9 @@ class SynchronizedMultiCameraCapture:
         # Create organized directory structure
         self.setup_directories()
         
+
+        #self.setup_d415_synchronized("821312062833")  # D415 serial number
+
         # Camera objects
         self.d415_pipeline = None
         self.d405_pipeline = None
@@ -39,6 +42,8 @@ class SynchronizedMultiCameraCapture:
         # Synchronization objects
         self.d415_align = None  # Hardware alignment for D415
         
+        
+
         # Recording state
         self.recording = False
         self.frame_count = 0
@@ -128,6 +133,9 @@ class SynchronizedMultiCameraCapture:
                         print("  ✅ D415 RGB-Depth synchronization verified")
                         return True
             
+            # Save calibration data after successful setup
+            self.save_camera_calibration()
+
             print("  ⚠️  D415 sync test completed, but timing may vary")
             return True
                 
@@ -200,6 +208,8 @@ class SynchronizedMultiCameraCapture:
             print(f"  ❌ Platform Camera {cam_id} setup failed: {e}")
             return False
     
+
+
     def capture_synchronized_frames(self):
         """Capture frames with proper synchronization"""
         frames = {}
@@ -411,7 +421,7 @@ class SynchronizedMultiCameraCapture:
             
         if 'd415_depth' in frames:
             depth_file = self.d415_dir / "depth" / f"{frame_num}_depth_{timestamp}.png"
-            cv2.imwrite(str(depth_file), frames['d415_depth'])
+            cv2.imwrite(str(depth_file), frames['d415_depth'].astype(np.uint16))
             saved_count += 1
             saved_details.append("D415 Depth")
             
@@ -426,7 +436,7 @@ class SynchronizedMultiCameraCapture:
         # Save D405 frames
         if 'd405_depth' in frames:
             depth_file = self.d405_dir / "depth" / f"{frame_num}_depth_{timestamp}.png"
-            cv2.imwrite(str(depth_file), frames['d405_depth'])
+            cv2.imwrite(str(depth_file), frames['d405_depth'].astype(np.uint16))
             saved_count += 1
             saved_details.append("D405 Depth")
             
@@ -565,6 +575,190 @@ class SynchronizedMultiCameraCapture:
                 pass
         
         cv2.destroyAllWindows()
+
+    def save_camera_calibration(self):
+        """Save camera intrinsic parameters as recommended in doc"""
+        if self.d415_pipeline:
+            try:
+                profile = self.d415_pipeline.get_active_profile()
+                color_profile = profile.get_stream(rs.stream.color)
+                depth_profile = profile.get_stream(rs.stream.depth)
+                
+                color_intrinsics = color_profile.as_video_stream_profile().get_intrinsics()
+                depth_intrinsics = depth_profile.as_video_stream_profile().get_intrinsics()
+                
+                calibration_data = {
+                    "device_info": {
+                        "serial_number": "821312062833",
+                        "device_name": "Intel RealSense D415",
+                        "firmware_version": profile.get_device().get_info(rs.camera_info.firmware_version)
+                    },
+                    "color_intrinsics": {
+                        "width": color_intrinsics.width,
+                        "height": color_intrinsics.height,
+                        "fx": color_intrinsics.fx,
+                        "fy": color_intrinsics.fy,
+                        "cx": color_intrinsics.ppx,
+                        "cy": color_intrinsics.ppy,
+                        "distortion_model": str(color_intrinsics.model),
+                        "distortion_coeffs": list(color_intrinsics.coeffs)
+                    },
+                    "depth_intrinsics": {
+                        "width": depth_intrinsics.width,
+                        "height": depth_intrinsics.height,
+                        "fx": depth_intrinsics.fx,
+                        "fy": depth_intrinsics.fy,
+                        "cx": depth_intrinsics.ppx,
+                        "cy": depth_intrinsics.ppy,
+                        "depth_scale": profile.get_device().first_depth_sensor().get_depth_scale()
+                    },
+                    "capture_settings": {
+                        "target_range_mm": [self.target_range[0]*1000, self.target_range[1]*1000],
+                        "visual_preset": "high_accuracy",
+                        "laser_power": 360
+                    }
+                }
+                
+                calib_file = self.output_dir / "camera_calibration.json"
+                with open(calib_file, 'w') as f:
+                    json.dump(calibration_data, f, indent=2)
+                print("✅ Camera calibration saved")
+                
+            except Exception as e:
+                print(f"⚠️  Could not save calibration: {e}")
+    def save_depth_with_precision(self, depth_frame, filepath):
+        """Save depth with 16-bit precision as recommended"""
+        # Ensure depth is in millimeters and save as 16-bit
+        depth_mm = depth_frame.astype(np.uint16)
+        success = cv2.imwrite(str(filepath), depth_mm)
+        return success
+
+    def verify_data_quality(self, rgb_frame, depth_frame):
+        """Verify RGB-depth alignment and data quality"""
+        quality_metrics = {}
+        
+        try:
+            # 1. Edge alignment check
+            rgb_gray = cv2.cvtColor(rgb_frame, cv2.COLOR_BGR2GRAY)
+            rgb_edges = cv2.Canny(rgb_gray, 50, 150)
+            
+            # Normalize depth for edge detection
+            depth_normalized = cv2.normalize(depth_frame, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+            depth_edges = cv2.Canny(depth_normalized, 50, 150)
+            
+            # Calculate alignment score
+            intersection = np.sum(rgb_edges & depth_edges)
+            union = np.sum(rgb_edges | depth_edges)
+            alignment_score = intersection / union if union > 0 else 0
+            quality_metrics['edge_alignment'] = alignment_score
+            
+            # 2. Depth coverage in target range
+            valid_depth = depth_frame[depth_frame > 0]
+            if len(valid_depth) > 0:
+                min_range_mm = self.target_range[0] * 1000
+                max_range_mm = self.target_range[1] * 1000
+                
+                in_range_pixels = np.sum((depth_frame >= min_range_mm) & 
+                                    (depth_frame <= max_range_mm))
+                total_valid_pixels = np.sum(depth_frame > 0)
+                
+                quality_metrics['depth_coverage'] = in_range_pixels / total_valid_pixels
+                quality_metrics['mean_depth_mm'] = np.mean(valid_depth)
+                quality_metrics['depth_std_mm'] = np.std(valid_depth)
+            
+            # 3. Check for missing/invalid depth regions
+            invalid_pixels = np.sum(depth_frame == 0)
+            total_pixels = depth_frame.shape[0] * depth_frame.shape[1]
+            quality_metrics['invalid_depth_ratio'] = invalid_pixels / total_pixels
+            
+            return quality_metrics
+            
+        except Exception as e:
+            print(f"Quality verification error: {e}")
+            return {}
+    
+    def enhanced_save_synchronized_frame_set(self, frames):
+        """Enhanced saving with quality metrics and proper depth precision"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        frame_num = f"{self.frame_count:06d}"
+        
+        saved_count = 0
+        saved_details = []
+        quality_data = {}
+        
+        # Save D415 synchronized frames with enhanced precision
+        if 'd415_rgb' in frames and 'd415_depth' in frames:
+            rgb_frame = frames['d415_rgb']
+            depth_frame = frames['d415_depth']
+            
+            # Verify data quality
+            quality_metrics = self.verify_data_quality(rgb_frame, depth_frame)
+            quality_data.update(quality_metrics)
+            
+            # Save RGB
+            rgb_file = self.d415_dir / "rgb" / f"{frame_num}_rgb_{timestamp}.png"
+            cv2.imwrite(str(rgb_file), rgb_frame)
+            saved_count += 1
+            saved_details.append("D415 RGB")
+            
+            # Save depth with 16-bit precision
+            depth_file = self.d415_dir / "depth" / f"{frame_num}_depth_{timestamp}.png"
+            if self.save_depth_with_precision(depth_frame, depth_file):
+                saved_count += 1
+                saved_details.append("D415 Depth (16-bit)")
+            
+            # Save overlay
+            overlay = self.create_depth_overlay(rgb_frame, depth_frame)
+            overlay_file = self.d415_dir / "overlay" / f"{frame_num}_overlay_{timestamp}.png"
+            cv2.imwrite(str(overlay_file), overlay)
+            saved_count += 1
+            saved_details.append("D415 Overlay")
+        
+        # Enhanced metadata with quality metrics
+        metadata = {
+            "frame_set": self.frame_count,
+            "timestamp": timestamp,
+            "cameras_captured": list(frames.keys()),
+            "files_saved": saved_count,
+            "target_range_mm": [self.target_range[0]*1000, self.target_range[1]*1000],
+            "sync_quality_ms": frames.get('sync_quality', 0),
+            "data_quality": quality_data,
+            "file_details": saved_details,
+            "depth_format": "16-bit PNG (millimeters)",
+            "alignment_method": "hardware_synchronized"
+        }
+        
+        metadata_file = self.sync_dir / f"{frame_num}_metadata_{timestamp}.json"
+        with open(metadata_file, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        self.frame_count += 1
+        
+        # Enhanced status reporting
+        sync_quality = frames.get('sync_quality', 0)
+        alignment_score = quality_data.get('edge_alignment', 0)
+        depth_coverage = quality_data.get('depth_coverage', 0)
+        
+        print(f"📸 Set {self.frame_count}: {saved_count} files | "
+            f"Sync: {sync_quality:.1f}ms | "
+            f"Align: {alignment_score:.2f} | "
+            f"Coverage: {depth_coverage:.1%}")
+        
+        return saved_count
+    def verify_alignment(self, rgb_frame, depth_frame):
+        """Verify RGB-depth alignment quality"""
+        # Create edge maps
+        rgb_edges = cv2.Canny(cv2.cvtColor(rgb_frame, cv2.COLOR_BGR2GRAY), 50, 150)
+        depth_edges = cv2.Canny((depth_frame / 256).astype(np.uint8), 50, 150)
+        
+        # Calculate edge alignment score
+        union = np.sum(rgb_edges | depth_edges)
+        if union > 0:
+            alignment_score = np.sum(rgb_edges & depth_edges) / union
+        else:
+            alignment_score = 0
+        return alignment_score
+
 
 def main():
     parser = argparse.ArgumentParser(description='Synchronized Multi-Camera Capture')
