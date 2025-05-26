@@ -42,3 +42,5 @@ python synchronized_d415_capture.py --min-range 0.4 --max-range 0.58 --output-di
 ![000000_synchronized_20250526_095608](https://github.com/user-attachments/assets/b8b1b7ce-2498-46f1-96f9-186f12fbe315)
 
 ![image](https://github.com/user-attachments/assets/596d8c98-cacc-4b14-afcf-33e805fe6bc3)
+![image](https://github.com/user-attachments/assets/57a83b9f-424c-4448-ad2e-131396bd0522)
+
