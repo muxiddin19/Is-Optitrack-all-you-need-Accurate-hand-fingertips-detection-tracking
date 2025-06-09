@@ -16,8 +16,8 @@ def create_split_files(data_dir):
                 aligned_part = parts[0]
                 file_part = '_'.join(parts[1:])
                 
-                rgb_path = f"{aligned_part}{file_part}.png"
-                depth_path = f"{aligned_part}{file_part}.png"
+                rgb_path = f"rgb/{aligned_part}{file_part}.png"
+                depth_path = f"depth/{aligned_part}{file_part}.png"
                 focal_length = "518.8579"
                 
                 entry = f"{rgb_path} {depth_path} {focal_length}"
@@ -37,8 +37,8 @@ def create_split_files(data_dir):
                 aligned_part = parts[0]
                 file_part = '_'.join(parts[1:])
                 
-                rgb_path = f"{aligned_part}{file_part}.png"
-                depth_path = f"{aligned_part}{file_part}.png"
+                rgb_path = f"rgb/{aligned_part}{file_part}.png"
+                depth_path = f"depth/{aligned_part}{file_part}.png"
                 focal_length = "518.8579"
                 
                 entry = f"{rgb_path} {depth_path} {focal_length}"
@@ -47,14 +47,14 @@ def create_split_files(data_dir):
         print(f"Test images directory not found: {test_images_dir}")
     
     # Write train.txt
-    train_file = f"{data_dir}/train.txt"
+    train_file = f"{data_dir}/train_fixed.txt"
     with open(train_file, 'w') as f:
         for entry in train_entries:
             f.write(f"{entry}\n")
     print(f"Created {train_file} with {len(train_entries)} entries")
     
     # Write test.txt
-    test_file = f"{data_dir}/test.txt"
+    test_file = f"{data_dir}/test_fixed.txt"
     with open(test_file, 'w') as f:
         for entry in test_entries:
             f.write(f"{entry}\n")
